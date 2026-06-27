@@ -9,17 +9,17 @@ Provenance Guard is a secure, multi-signal linguistic forensics system designed 
 ### The Journey of a Text Submission
 1. **API Gateway & Rate Limiting (`app.py`)**:
    - The user client sends a `POST` request to `/submit` containing the JSON payload with the raw text.
-   - The request passes through a rate limiter (`Flask-Limiter`) configured to block excessive requests (limit: 5 submissions per minute) to prevent API abuse.
+   - The request passes through a rate limiter (`Flask-Limiter`) configured to block excessive requests (limit: 10 submissions per minute, 100 per day) to prevent API abuse.
 2. **Pipeline Orchestrator (`pipeline.py`)**:
-   - The orchestrator parses the submission, assigns a unique `submission_id` (UUIDv4), and delegates analysis to the detection pipeline.
+   - The orchestrator parses the submission, assigns a unique `content_id` (UUIDv4), and delegates analysis to the detection pipeline.
 3. **Signal Evaluators (`signals.py`)**:
-   - **Signal 1: Lexical & Structural Diversity (Local Stats)**: Extracts standard deviation of sentence lengths and vocabulary diversity (Type-Token Ratio). It returns a score between `0.0` (predictable/AI-like) and `1.0` (irregular/human-like).
+   - **Signal 1: Lexical & Structural Diversity (Local Stats)**: Extracts standard deviation of sentence lengths, vocabulary diversity (Type-Token Ratio), and a Transition Predictability Index. It returns a score between `0.0` (predictable/AI-like) and `1.0` (irregular/human-like).
    - **Signal 2: Stylistic Pattern Analyzer (Groq LLM)**: Evaluates structural boilerplate, typical AI transition clichés, and hedging tones using Groq's Llama-3.3-70b model. It returns a score between `0.0` (pure AI-like prose) and `1.0` (highly human-like pacing).
 4. **Scoring Engine (`scoring.py`)**:
    - Computes a weighted combined probability score: 30% Local Stats and 70% Groq LLM.
    - Calculates the confidence score based on the distance from the 0.5 decision boundary: $\text{Confidence} = 2 \times |P_{\text{human}} - 0.5|$.
 5. **Label Generator (`labels.py`)**:
-   - Map probabilities and confidence thresholds to user-friendly status labels, visual badge colors, and descriptive messages.
+   - Maps probabilities and confidence thresholds to user-friendly status labels, visual badge colors, and descriptive messages.
 6. **Audit Log Store (`audit.py`)**:
    - Writes the full record (including snippet, signal scores, final confidence, and timestamp) into `audit_log.json`.
 7. **Response**:
@@ -39,12 +39,12 @@ sequenceDiagram
     participant Audit as audit.py (audit_log.json)
 
     Note over Client, App: Submission Flow
-    Client->>App: POST /submit {text}
+    Client->>App: POST /submit {text, creator_id}
     App->>App: Check Rate Limit (Flask-Limiter)
     App->>Pipe: Run Pipeline(text)
     par Run Signals
-        Pipe->>Sig1: Extract Lexical Diversity
-        Sig1-->>Pipe: Diversity Score (0.0 - 1.0)
+        Pipe->>Sig1: Extract Lexical & Sentence Stats
+        Sig1-->>Pipe: Stats Score (0.0 - 1.0)
     and
         Pipe->>Sig2: Evaluate via Groq API
         Sig2-->>Pipe: Style Score (0.0 - 1.0)
@@ -56,60 +56,73 @@ sequenceDiagram
     Pipe->>Audit: Append Log Entry(id, score, confidence, label)
     Audit-->>Pipe: Logged
     Pipe-->>App: Results
-    App-->>Client: 200 OK {submission_id, attribution_result, confidence, transparency_label}
+    App-->>Client: 200 OK {content_id, attribution, confidence, label}
 
     Note over Client, App: Appeal Flow
-    Client->>App: POST /appeal {submission_id, reasoning}
-    App->>Audit: Update Record Status to "under review" and attach reasoning
+    Client->>App: POST /appeal {content_id, creator_reasoning}
+    App->>Audit: Update Record Status to "under_review" and append reasoning
     Audit-->>App: Updated
-    App-->>Client: 200 OK {status: "under review"}
+    App-->>Client: 200 OK {status: "under_review"}
 ```
 
 ---
 
-## 2. Detection Signals
+## 2. Detection Signals & Confidence Scoring Rationale
 
-### Signal 1: Lexical and Structural Diversity (Local Statistical Signal)
-* **What it measures**: Vocabulary diversity (Type-Token Ratio) and sentence length variability (standard deviation of words per sentence).
-* **Why it differs**: LLMs default to generating highly uniform sentence structures (regular sentence lengths) and reuse a safe, standard vocabulary to optimize likelihood. Human writers naturally exhibit high "burstiness" (mixing short, punchy sentences with long, complex ones) and utilize a more idiosyncratic, diverse set of words.
-* **Blind spots (What it can't capture)**: 
-  - Short text snippets (e.g., under 100 words) where statistical variance is naturally restricted.
-  - Highly polished, academic, or professional human writing which intentionally standardizes sentence structure and repeats domain-specific terminology.
+### Rationale Behind Signals
+We chose a combination of a local statistical metric and a LLM style forensics metric because they cover each other's weaknesses:
+- **Signal 1 (Local Heuristic)**: Directly measures physical characteristics of prose (repetitiveness, sentence lengths, transition words). It is fast, deterministic, and doesn't require API round-trips.
+- **Signal 2 (Groq LLM forensically tuned)**: Evaluates semantic nuances, tone, hedging, objective alignment, and stylistic boilerplate. While slower and non-deterministic, it handles complex vocabulary structures that statistical heuristics misjudge.
 
-### Signal 2: Stylistic Pattern Analyzer (Groq LLM Signal)
-* **What it measures**: Semantic predictability, overused transitional phrases (e.g., "Furthermore", "In conclusion", "It is important to remember"), and balanced, non-committal hedging styles.
-* **Why it differs**: AI models are RLHF-aligned to sound objective, helpful, and highly structured, leaving a signature semantic footprint. Humans write with spontaneous emotional transitions, personal anecdotes, and irregular rhetorical structures.
-* **Blind spots (What it can't capture)**:
-  - Advanced prompt engineering where an AI is specifically instructed to adopt a highly chaotic, informal, or grammatically imperfect voice.
-  - Human writing that happens to address balanced debates or reviews in a formal, structured, assistant-like tone.
+### Rationale Behind Scoring & Ensembling
+We combine the signals using a weighted average: $0.3 \times \text{Signal 1} + 0.7 \times \text{Signal 2}$. The LLM signal is weighted higher because semantic evaluation is far more robust against stylized human variations than basic TTR or sentence standard deviations.
 
----
-
-## 3. False Positive Mitigation & Appeals Workflow
-
-### Handling Misclassifications
-If a human writer submits highly structured or academic prose, the system will calculate scores close to the decision boundary (e.g., $P_{\text{human}} = 0.48$).
-* **Confidence score**: The confidence score will drop (e.g., $4\%$).
-* **Uncertain label**: Instead of declaring the text to be AI, the system triggers the **Uncertain / Mixed Attribution** label.
-* **Appeal option**: The creator can submit their reasoning via `POST /appeal`. The record's status in `audit_log.json` is updated to `"under review"`, preserving original metrics while capturing the creator's voice.
+### What We'd Change in a Real Production Deployment
+1. **AI Model Optimization**: Instead of calling a 70B parameter model via API for every single request, we would fine-tune a smaller model (like a RoBERTa-based classification head) and host it locally to lower latency and API costs.
+2. **Caching**: We would integrate Redis to cache SHA-256 hashes of submitted documents so that identical content doesn't trigger redundant pipeline analysis.
+3. **Database Integration**: Replace the file-based `audit_log.json` database with a transactional SQL database (e.g., PostgreSQL) featuring indexes on `content_id` and `creator_id` for fast query performance.
 
 ---
 
-## 4. Transparency Label Variants
+## 3. Example Submissions & Scoring Variation
+
+Our scoring engine produces meaningful differences in confidence scores across varied content types:
+
+### 1. High-Confidence Submission (Clearly Human-Written)
+* **Text**: *"ok so i finally tried that new ramen place downtown and honestly? underwhelming. the broth was fine but they put WAY too much sodium in it and i was thirsty for like three hours after. my friend got the spicy version and said it was better. probably won't go back unless someone drags me there"*
+* **Local Stats Score**: `0.9450`
+* **Groq LLM Score**: `0.9500`
+* **Combined Probability ($P_{\text{human}}$)**: `0.9485`
+* **Calibrated Confidence Score**: `0.8970` (89%)
+* **Resulting Label**: `High-Confidence Human`
+
+### 2. Lower-Confidence Submission (Borderline Formal Human)
+* **Text**: *"The relationship between monetary policy and asset price inflation has been extensively studied in the literature. Central banks face a fundamental tension between their mandate for price stability and the unintended consequences of prolonged low interest rates on equity and real estate valuations."*
+* **Local Stats Score**: `0.8667`
+* **Groq LLM Score**: `0.2000`
+* **Combined Probability ($P_{\text{human}}$)**: `0.4000`
+* **Calibrated Confidence Score**: `0.2000` (20%)
+* **Resulting Label**: `Uncertain / Mixed Attribution`
+
+---
+
+## 4. Transparency Label Wording Variants
+
+The visual transparency badge and detailed description text displayed to the user:
 
 ### 1. High-Confidence Human (Green Badge)
-* **Status**: `High-Confidence Human`
-* **Exact Text displayed**:
+* **Status Badge**: `High-Confidence Human`
+* **Text Wording**:
   > *"Attribution analysis indicates with high confidence ({confidence_percentage}%) that this text was written by a human. The content displays natural linguistic flow, high sentence length variance, and vocabulary patterns typical of human writing."*
 
 ### 2. High-Confidence AI (Red Badge)
-* **Status**: `High-Confidence AI`
-* **Exact Text displayed**:
+* **Status Badge**: `High-Confidence AI`
+* **Text Wording**:
   > *"Attribution analysis indicates with high confidence ({confidence_percentage}%) that this text was generated by an artificial intelligence model. The content features highly uniform sentence lengths and predictable word choices consistent with machine-generated prose."*
 
 ### 3. Uncertain / Mixed Attribution (Yellow Badge)
-* **Status**: `Uncertain / Mixed Attribution`
-* **Exact Text displayed**:
+* **Status Badge**: `Uncertain / Mixed Attribution`
+* **Text Wording**:
   > *"Attribution analysis is uncertain (confidence: {confidence_percentage}%). The text displays a mixture of stylistic patterns, such as human-like vocabulary diversity combined with structured sentence variance, making it inconclusive to attribute to either human or AI."*
 
 ---
@@ -137,9 +150,9 @@ If a human writer submits highly structured or academic prose, the system will c
 
 ---
 
-## 6. Audit Log Format
+## 6. Audit Log Database Structure
 
-Every evaluation is preserved in `audit_log.json`. Below are the 3 sample log entries currently stored in the system (retrieved from `GET /log`):
+Every evaluation is preserved in `audit_log.json`. Below is a sample log showing 3 entries, including a submission that was contested through the appeals workflow:
 
 ```json
 [
@@ -227,10 +240,31 @@ Every evaluation is preserved in `audit_log.json`. Below are the 3 sample log en
 ]
 ```
 
+---
+
+## 7. Known Limitations
+
+* **Minimalist/Structured Poetry**: Our statistical signal (`LocalStatsSignal`) measures vocabulary variation (Type-Token Ratio) and sentence length variability to capture human expression. Highly minimalist poetry with short, uniform lines and a restricted word set naturally has low standard deviation and low TTR, leading the heuristics to misclassify it as AI-generated.
+* **Non-Native English Formal Writing**: Non-native English speakers writing formal reviews or essays may follow structured instruction guidelines closely, using repetitive transitional phrases (e.g. *"Moreover"*, *"Furthermore"*). This predictability can trigger an AI false positive despite being human-written.
 
 ---
 
-## 7. Setup & Running Instructions
+## 8. Specification Reflection
+
+* **How the spec guided implementation**: The strict schema demands for both the submit route (`creator_id` validation) and the appeal route (`content_id` and `"under_review"` status indicators) guided our database schema mapping, forcing us to build a robust ensembled pipeline that logs all relevant metrics rather than just returning a simple binary result.
+* **Where we diverged**: The specification initially implied a simple binary scoring boundary. However, during validation, we implemented a continuous ensembled probability schema with dynamic threshold boundaries (mapping combined probability to confidence values relative to the 0.5 boundary) and calibrated the uncertainty boundary from `0.60` to `0.40`. This divergence ensured that borderline cases correctly output `"Uncertain"` rather than forcing a high-confidence false positive.
+
+---
+
+## 9. AI Usage Acknowledgement
+
+We utilized AI coding assistants during this project's implementation in two primary instances:
+1. **Prompting Core Signals & Scoring**: We prompted the AI assistant to outline `LocalStatsSignal` (calculating lexical diversity TTR and sentence length standard deviation). The assistant generated a standard implementation. We manually revised it to handle empty text errors, modified the standard deviation ranges, and added a custom **Transition Predictability Index** (TPI) to search for common transitional phrases.
+2. **Flask-Limiter Integration**: We prompted the assistant to apply route rate limits. The assistant generated default decorators. We overrode the configuration to explicitly pass `storage_uri="memory://"` to prevent Flask-Limiter from crashing during local startup under newer versions and added mock validation schema tests to `tests/test_app.py`.
+
+---
+
+## 10. Setup & Running Instructions
 
 1. **Activate Environment**:
    ```bash
