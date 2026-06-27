@@ -505,7 +505,7 @@
                 const response = await fetch("/submit", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ text })
+                    body: JSON.stringify({ text, creator_id: "web-ui-user" })
                 });
 
                 if (response.status === 429) {
@@ -611,7 +611,8 @@
             try {
                 const response = await fetch("/log?limit=5");
                 if (!response.ok) return;
-                const logs = await response.json();
+                const resultData = await response.json();
+                const logs = resultData.entries || [];
                 
                 if (logs.length === 0) {
                     auditList.innerHTML = `<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No logs found. Submit text above to start logging.</p>`;

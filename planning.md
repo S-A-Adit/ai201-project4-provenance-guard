@@ -5,190 +5,106 @@ We are building a robust text provenance detection system called **Provenance Gu
 
 ---
 
-## 1. Architecture Narrative
+## 1. Core Design Questions
 
-### The Journey of a Text Submission
-1. **API Gateway / Flask Routing (`app.py`)**:
-   - The user client sends a `POST` request to `/submit` containing the raw JSON payload with the text.
-   - The request is intercepted by the **Rate Limiter** (`Flask-Limiter`). If the client has exceeded the limit, the request is rejected with a `429 Too Many Requests` error.
-   - If allowed, the router validates the payload structure (e.g., checks if `text` is present and not empty).
-2. **Pipeline Orchestrator (`pipeline.py`)**:
-   - The verified raw text is passed to the `DetectionPipeline`.
-   - The pipeline instantiates and executes two independent **Feature extractors (Signals)**:
-     - **Signal 1: Lexical and Structural Diversity Extractor**
-     - **Signal 2: Stylistic Pattern Analyzer (via Groq API)**
-3. **Signal Evaluators**:
-   - **Signal 1 (Local)**: Computes the Type-Token Ratio (vocabulary richness) and standard deviation of sentence lengths. It returns a signal score between 0.0 (high AI probability) and 1.0 (high human probability).
-   - **Signal 2 (Groq LLM)**: Sends a structured prompt to the Groq API (`llama-3.3-70b-versatile`) to evaluate linguistic predictability, cliché transition usage, and stylistic signature. It returns a score between 0.0 (high AI probability) and 1.0 (high human probability).
-4. **Scoring Engine (`scoring.py`)**:
-   - Receives the raw scores from both signals.
-   - Applies a weighted ensemble formula to compute the **Combined Probability Score** ($P_{\text{human}}$).
-   - Computes the **Confidence Score** as the distance from the midpoint (0.5), mapped to a $0.0 - 1.0$ scale.
-5. **Label Generator (`labels.py`)**:
-   - Evaluates the final classification (AI, Human, or Uncertain) based on the combined score and confidence thresholds.
-   - Generates the appropriate **Transparency Label** (exact status text, description, and badge category) customized to the calculated confidence level.
-6. **Audit Log Store (`audit.py`)**:
-   - Records a structured entry containing the submission ID, raw text snippet, individual signal scores, final combined score, confidence, label, and timestamp into a persistent JSON-based audit log (`audit_log.json`).
-7. **Response Serialization**:
-   - Returns a structured `200 OK` JSON response to the user containing the attribution result, confidence score, transparency label, and submission ID.
+### Detection Signals
+We utilize two distinct, independent signals to classify incoming text:
+* **Signal 1: Lexical and Structural Diversity (Local Statistical Signal)**:
+  * **What it measures**: Vocabulary diversity using the Type-Token Ratio (TTR) and structural variation using the standard deviation of words per sentence.
+  * **Output format**: A continuous float score between `0.0` (indicates high predictability typical of AI text) and `1.0` (indicates high variability typical of human text).
+* **Signal 2: Stylistic Pattern Analyzer (Groq LLM Signal)**:
+  * **What it measures**: Semantic patterns, repetitive AI cliché transitions (e.g., "Furthermore", "In conclusion"), and balanced objective hedging.
+  * **Output format**: A continuous float score between `0.0` (extremely machine-like prose) and `1.0` (highly human stylistic pacing).
+* **Combination Logic**: We compute the combined probability $P_{\text{human}}$ as a weighted average: $0.3 \times \text{Signal 1} + 0.7 \times \text{Signal 2}$. The final confidence score is derived from the distance to the boundary (0.5):
+  $$\text{Confidence} = 2 \times |P_{\text{human}} - 0.5|$$
+  This maps confidence onto a `0.0` to `1.0` scale.
 
----
+### Uncertainty Representation
+* **What a confidence score of 0.4 means**: This indicates a combined probability of `0.3` (likely AI) or `0.7` (likely human). It represents a significant classification divergence from absolute uncertainty (0.5 probability/0.0 confidence).
+* **Calibrating raw outputs**: Scores are normalized using standard heuristics (TTR mapped from `[0.45, 0.75]` to `[0.0, 1.0]` and sentence standard deviation mapped from `[1.5, 7.5]` to `[0.0, 1.0]`).
+* **Threshold Boundaries**:
+  * **Confidence < 0.40**: Uncertain / Mixed Attribution (Yellow Badge).
+  * **Confidence >= 0.40 and $P_{\text{human}} \ge 0.5$**: High-Confidence Human (Green Badge).
+  * **Confidence >= 0.40 and $P_{\text{human}} < 0.5$**: High-Confidence AI (Red Badge).
 
-## 2. Detection Signals
 
-### Signal 1: Lexical and Structural Diversity (Local Statistical Signal)
-* **What it measures**: The combination of vocabulary diversity (Type-Token Ratio) and sentence length variability (standard deviation of words per sentence).
-* **Why it differs**: LLMs default to generating highly uniform sentence structures (regular sentence lengths) and reuse a safe, standard vocabulary to optimize likelihood. Human writers naturally exhibit high "burstiness" (mixing short, punchy sentences with long, complex ones) and utilize a more idiosyncratic, diverse set of words.
-* **Blind spots (What it can't capture)**: 
-  - Short text snippets (e.g., under 100 words) where statistical variance is naturally restricted.
-  - Highly polished, academic, or professional human writing which intentionally standardizes sentence structure and repeats domain-specific terminology.
+### Transparency Label Design
+Our system features three distinct label variants with exact user-facing wording:
+1. **High-Confidence Human (Green Badge)**
+   * **Status**: `High-Confidence Human`
+   * **Text**: *"Attribution analysis indicates with high confidence ({confidence_percentage}%) that this text was written by a human. The content displays natural linguistic flow, high sentence length variance, and vocabulary patterns typical of human writing."*
+2. **High-Confidence AI (Red Badge)**
+   * **Status**: `High-Confidence AI`
+   * **Text**: *"Attribution analysis indicates with high confidence ({confidence_percentage}%) that this text was generated by an artificial intelligence model. The content features highly uniform sentence lengths and predictable word choices consistent with machine-generated prose."*
+3. **Uncertain / Mixed Attribution (Yellow Badge)**
+   * **Status**: `Uncertain / Mixed Attribution`
+   * **Text**: *"Attribution analysis is uncertain (confidence: {confidence_percentage}%). The text displays a mixture of stylistic patterns, such as human-like vocabulary diversity combined with structured sentence variance, making it inconclusive to attribute to either human or AI."*
 
-### Signal 2: Stylistic Pattern Analyzer (Groq LLM Signal)
-* **What it measures**: Semantic predictability, overused transitional phrases (e.g., "Furthermore", "In conclusion", "It is important to remember"), and balanced, non-committal hedging styles.
-* **Why it differs**: AI models are RLHF-aligned to sound objective, helpful, and highly structured, leaving a signature semantic footprint. Humans write with spontaneous emotional transitions, personal anecdotes, and irregular rhetorical structures.
-* **Blind spots (What it can't capture)**:
-  - Advanced prompt engineering where an AI is specifically instructed to adopt a highly chaotic, informal, or grammatically imperfect voice.
-  - Human writing that happens to address balanced debates or reviews in a formal, structured, assistant-like tone.
+### Appeals Workflow
+* **Submitter**: Any creator who receives an attribution decision on their text.
+* **Information provided**: Their unique `submission_id` and a detailed text explanation explaining why the result is incorrect.
+* **System Actions**: The system updates the submission record's `appeal` field in `audit_log.json` to log the reason and updates the status flag to `"under review"`.
+* **Reviewer Queue View**: A human moderator opening the appeal queue sees a list containing: the submission ID, text snippet, attribution result, confidence score, raw signal values, the creator's written appeal reasoning, and the logged timestamp.
 
----
-
-## 3. The False Positive Scenario (Human Misclassified as AI)
-
-If a human writer submits a highly structured piece of text (e.g., a formal essay or technical documentation) and the system misclassifies it:
-1. **Confidence Score Reflection**: The system will produce signal scores close to the decision boundary (e.g., Combined $P_{\text{human}} = 0.45$). This maps to a low confidence (e.g., $10\%$ confidence).
-2. **Label Output**: Rather than accusing the creator with high confidence, the system renders the **Uncertain / Mixed Attribution** label. The text will state: *"Attribution analysis is uncertain. The writing exhibits a mixture of highly structured patterns and human-like phrasing."*
-3. **Creator Appeal**:
-   - The creator can click "Appeal" on the interface or send a `POST /appeal` request specifying their `submission_id` and their reasoning (e.g., *"This is my academic paper, I write formally"*).
-   - The system intercepts the appeal, logs the appeal reason directly inside the structured audit record for that submission, and flags the submission status as `"under review"`.
+### Anticipated Edge Cases
+* **Edge Case 1: Minimalist Poetry**: A short poem featuring simple vocabulary and repeating short lines. This results in a low Type-Token Ratio and very small sentence length variance, which our heuristics will misclassify as AI-generated.
+* **Edge Case 2: Formal Academic Writing**: A highly structured research essay with consistent sentence lengths and standard transitional markers (e.g., "Furthermore", "In conclusion"). This predictability can trigger an AI false positive despite being human-written.
 
 ---
 
-## 4. API Surface Sketch
+## 2. Architecture
 
-### 1. `POST /submit`
-* **Accepts**:
-  ```json
-  {
-    "text": "The quick brown fox jumps over the lazy dog..."
-  }
-  ```
-* **Returns**:
-  ```json
-  {
-    "submission_id": "uuid-v4-string",
-    "attribution_result": "human" | "ai" | "uncertain",
-    "confidence_score": 0.88,
-    "signals": {
-      "lexical_diversity": 0.85,
-      "style_pattern_match": 0.90
-    },
-    "transparency_label": {
-      "status": "High-Confidence Human",
-      "description": "Attribution analysis shows a high level of confidence (88%) that this text was written by a human. The writing displays natural linguistic diversity and irregular sentence structures.",
-      "badge_color": "green"
-    },
-    "created_at": "2026-06-27T19:08:44Z"
-  }
-  ```
+### Narrative
+The submission flow accepts client text, routes it through rate-limiting, evaluates it using local stats and the Groq LLM API, combines scores into a confidence level, logs the results in `audit_log.json`, and returns the transparency label. The appeal flow allows creators to reference a submission ID and submit their reasoning, which updates the audit database to flag the record as "under review."
 
-### 2. `POST /appeal`
-* **Accepts**:
-  ```json
-  {
-    "submission_id": "uuid-v4-string",
-    "reasoning": "This is my personal journal entry."
-  }
-  ```
-* **Returns**:
-  ```json
-  {
-    "appeal_id": "uuid-v4-string",
-    "submission_id": "uuid-v4-string",
-    "status": "under review",
-    "reasoning": "This is my personal journal entry.",
-    "logged_at": "2026-06-27T19:10:12Z"
-  }
-  ```
-
-### 3. `GET /log`
-* **Accepts**: None (Optional query param `?limit=10`)
-* **Returns**:
-  ```json
-  [
-    {
-      "submission_id": "uuid-v4-string",
-      "text_snippet": "The quick brown...",
-      "attribution_result": "human",
-      "confidence_score": 0.88,
-      "signals": {
-        "lexical_diversity": 0.85,
-        "style_pattern_match": 0.90
-      },
-      "appeal": {
-        "status": "under review",
-        "reasoning": "...",
-        "logged_at": "..."
-      },
-      "created_at": "..."
-    }
-  ]
-  ```
-
----
-
-## 5. System Diagrams
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client
-    participant App as app.py (Flask & Limiter)
-    participant Pipe as pipeline.py (Orchestrator)
-    participant Sig1 as Local Stats Signal
-    participant Sig2 as Groq LLM Signal
-    participant Score as scoring.py
-    participant Label as labels.py
-    participant Audit as audit.py (audit_log.json)
-
-    Note over Client, App: Submission Flow
-    Client->>App: POST /submit {text}
-    App->>App: Check Rate Limit (Flask-Limiter)
-    App->>Pipe: Run Pipeline(text)
-    par Run Signals
-        Pipe->>Sig1: Extract Lexical Diversity
-        Sig1-->>Pipe: Diversity Score (0.0 - 1.0)
-    and
-        Pipe->>Sig2: Evaluate via Groq API
-        Sig2-->>Pipe: Style Score (0.0 - 1.0)
-    end
-    Pipe->>Score: Calculate Combined Score & Confidence
-    Score-->>Pipe: combined_score, confidence_score
-    Pipe->>Label: Get Label Text(combined_score, confidence)
-    Label-->>Pipe: Transparency Label details
-    Pipe->>Audit: Append Log Entry(id, score, confidence, label)
-    Audit-->>Pipe: Logged
-    Pipe-->>App: Results
-    App-->>Client: 200 OK {submission_id, attribution_result, confidence, transparency_label}
-
-    Note over Client, App: Appeal Flow
-    Client->>App: POST /appeal {submission_id, reasoning}
-    App->>Audit: Update Record Status to "under review" and attach reasoning
-    Audit-->>App: Updated
-    App-->>Client: 200 OK {status: "under review"}
+### Sequence Diagram
+```
+Client                      Flask Server (app.py)          Pipeline Orchestrator           Audit Database
+  |                                   |                              |                              |
+  |----- POST /submit (raw text) ---->|                              |                              |
+  |                                   |--- Process signals ------->  |                              |
+  |                                   |   (Local & Groq LLM)         |                              |
+  |                                   |<-- Combined confidence ------|                              |
+  |                                   |                              |                              |
+  |                                   |--- Write audit record ------------------------------------->|
+  |                                   |<-- Success -------------------------------------------------|
+  |<---- 200 OK (Label & Score) ------|                              |                              |
+  |                                                                                                 |
+  |----- POST /appeal (reason) ------>|                                                             |
+  |                                   |--- Flag status "under review" and append reasoning -------->|
+  |                                   |<-- Updated -------------------------------------------------|
+  |<---- 200 OK (Under Review) -------|                                                             |
 ```
 
 ---
 
-## 6. Verification Plan
+## 3. AI Tool Plan
+
+### M3: Submission Endpoint & First Signal
+* **Spec Sections**: Detection Signals (Signal 1) + Architecture Diagram.
+* **Request Prompt**: Generate the Flask server skeleton (`app.py`), the local statistical feature extraction class `LocalStatsSignal` (TTR and sentence length standard deviation calculations), and route validation.
+* **Verification**: Run unit tests with specific mock inputs of highly repetitive text versus varying text to check that the local stats score differentiates them properly.
+
+### M4: Second Signal & Confidence Scoring
+* **Spec Sections**: Detection Signals (Signal 2) + Uncertainty Representation + Architecture Diagram.
+* **Request Prompt**: Implement the `GroqLLMSignal` utilizing the Groq SDK client for stylistic evaluation, and write the ensembling and confidence distance calculations in `ScoringEngine`.
+* **Verification**: Verify that the combined score ranges scale correctly between clearly human-like (0.8+) and machine-like (<0.2) inputs.
+
+### M5: Production Layer
+* **Spec Sections**: Transparency Label Design + Appeals Workflow + Architecture Diagram.
+* **Request Prompt**: Implement the `LabelGenerator` class that outputs the badge details, and code the `/appeal` endpoint which updates the audit database with creator reasoning.
+* **Verification**: Run tests to confirm all three label variants are reachable and that submitting an appeal correctly sets the flag to "under review".
+
+---
+
+## 4. Verification Plan
 
 ### Automated Tests
-We will write python unit tests in a test suite using `unittest` or `pytest`.
-- Run: `python -m unittest tests/test_app.py`
-  - Verifies `/submit` returns correct structures and classification boundaries.
-  - Verifies `/appeal` successfully modifies the audit log entry.
-  - Verifies rate limiting blocks calls after limits are exceeded.
+* Run `python -m unittest tests/test_app.py`
+  * Verifies `/submit` returns correct structures and classification boundaries.
+  * Verifies `/appeal` successfully modifies the audit log entry.
+  * Verifies rate limiting blocks calls after limits are exceeded.
 
 ### Manual Verification
-- Execute curl/Powershell commands to submit known AI text (e.g. standard ChatGPT output) and verify it gets flagged as AI.
-- Submit a diverse text (e.g. poetry) and verify it gets classified as Human.
-- Submit an appeal on a submission and fetch `/log` to confirm the status is updated to `"under review"`.
+* Submit sample texts of various lengths and complexities, appeal the results, and verify the live update on the Web UI dashboard.
+

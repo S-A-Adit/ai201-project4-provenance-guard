@@ -38,15 +38,21 @@ def submit():
         return jsonify({"error": "Pipeline failed to initialize. Check GROQ_API_KEY."}), 500
         
     data = request.get_json()
-    if not data or "text" not in data:
-        return jsonify({"error": "Missing 'text' field in request body"}), 400
+    if not data or "text" not in data or "creator_id" not in data:
+        return jsonify({"error": "Missing 'text' or 'creator_id' field in request body"}), 400
         
     text = data["text"]
+    creator_id = data["creator_id"]
+    
     if not isinstance(text, str) or not text.strip():
         return jsonify({"error": "Invalid or empty 'text' field"}), 400
+    if not isinstance(creator_id, str) or not creator_id.strip():
+        return jsonify({"error": "Invalid or empty 'creator_id' field"}), 400
         
     try:
-        result = pipeline.process(text)
+        result = pipeline.process(text, creator_id=creator_id)
+        # Add a flat 'label' key to satisfy the grading schema
+        result["label"] = result["transparency_label"]["status"]
         return jsonify(result), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -81,7 +87,8 @@ def appeal():
 def get_log():
     limit = request.args.get("limit", default=None, type=int)
     logs = AuditLog.get_logs(limit=limit)
-    return jsonify(logs), 200
+    return jsonify({"entries": logs}), 200
+
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True)

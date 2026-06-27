@@ -5,7 +5,7 @@ import math
 
 class LocalStatsSignal:
     """
-    Signal 1: Measures lexical and structural diversity.
+    Signal 1: Measures lexical diversity, structural variance, and transition predictable heuristics.
     Returns a score between 0.0 (high AI probability) and 1.0 (high human probability).
     """
     @staticmethod
@@ -43,6 +43,28 @@ class LocalStatsSignal:
             variance = sum((x - mean) ** 2 for x in sentence_lengths) / len(sentence_lengths)
             std_dev = math.sqrt(variance)
 
+        # 3. Transition Predictability Heuristics
+        ai_transitions = [
+            "furthermore", "moreover", "in conclusion", "to sum up", 
+            "it is important to note", "it is essential to", "stakeholders", 
+            "in summary", "overall", "consequently", "specifically"
+        ]
+        transition_count = 0
+        text_lower = text.lower()
+        for phrase in ai_transitions:
+            if phrase in text_lower:
+                transition_count += 1
+                
+        # Map transition count to score (0 transitions = 1.0, 1 = 0.6, 2 = 0.2, >=3 = 0.0)
+        if transition_count == 0:
+            transition_score = 1.0
+        elif transition_count == 1:
+            transition_score = 0.6
+        elif transition_count == 2:
+            transition_score = 0.2
+        else:
+            transition_score = 0.0
+
         # Normalize TTR: AI writing has a TTR of ~0.4-0.6, human writing is higher (~0.6-0.85)
         # We map TTR from range [0.45, 0.75] to [0.0, 1.0]
         if ttr <= 0.45:
@@ -63,8 +85,8 @@ class LocalStatsSignal:
         else:
             std_dev_score = (std_dev - 1.5) / 6.0
 
-        # Overall statistical score (average of the two, weighted slightly towards sentence variety)
-        combined_local = (ttr_score * 0.4) + (std_dev_score * 0.6)
+        # Weighted statistical score
+        combined_local = (ttr_score * 0.3) + (std_dev_score * 0.4) + (transition_score * 0.3)
         
         # Keep within bounds
         return max(0.0, min(1.0, combined_local))
@@ -88,8 +110,9 @@ class GroqLLMSignal:
         system_prompt = (
             "You are an expert linguistic forensics assistant specializing in distinguishing human-written text from AI-generated text. "
             "Analyze the input text for hallmarks of AI generation (such as overly polite/balanced structures, common transitional clichés "
-            "like 'In conclusion', 'Furthermore', 'Moreover', uniform flow, lack of stylistic quirks, or generic hedging) vs. human authorship "
+            "like 'In conclusion', 'Furthermore', 'Moreover', 'It is important to note', uniform flow, lack of stylistic quirks, or generic hedging) vs. human authorship "
             "(such as irregular pacing, creative/unexpected metaphors, minor typos/grammar irregularities, conversational tone, or emotional resonance). "
+            "Be highly sensitive to standard assistant patterns. If you identify strong hallmarks of AI writing, return a human_probability of 0.10 or lower. "
             "Respond ONLY with a JSON object containing two fields: "
             "1. 'human_probability': a float between 0.0 (completely AI-generated) and 1.0 (completely human-written). "
             "2. 'reasoning': a short string (maximum 1 sentence) explaining your primary linguistic reason for this probability.\n"

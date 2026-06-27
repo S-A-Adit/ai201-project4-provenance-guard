@@ -9,7 +9,7 @@ class DetectionPipeline:
         self.local_stats = LocalStatsSignal()
         self.groq_llm = GroqLLMSignal()
 
-    def process(self, text):
+    def process(self, text, creator_id="unknown"):
         submission_id = str(uuid.uuid4())
         
         # 1. Run local structural/lexical signal
@@ -32,7 +32,9 @@ class DetectionPipeline:
             llm_score=llm_score,
             combined_prob=combined_prob,
             confidence=confidence,
-            label_details=label_details
+            label_details=label_details,
+            creator_id=creator_id
         )
         
         return entry
+

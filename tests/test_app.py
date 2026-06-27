@@ -82,7 +82,10 @@ class TestProvenanceGuard(unittest.TestCase):
     def test_submit_endpoint(self, mock_llm_analyze):
         mock_llm_analyze.return_value = 0.9  # Mock LLM returning human score
         
-        payload = {"text": "Hello world, this is a human writing a poem about the sunrise."}
+        payload = {
+            "text": "Hello world, this is a human writing a poem about the sunrise.",
+            "creator_id": "test-user-1"
+        }
         response = self.app.post('/submit', 
                                  data=json.dumps(payload), 
                                  content_type='application/json')
@@ -101,8 +104,12 @@ class TestProvenanceGuard(unittest.TestCase):
         response = self.app.post('/submit', data=json.dumps({}), content_type='application/json')
         self.assertEqual(response.status_code, 400)
         
+        # Missing creator_id
+        response = self.app.post('/submit', data=json.dumps({"text": "Valid text"}), content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        
         # Invalid data type
-        response = self.app.post('/submit', data=json.dumps({"text": 12345}), content_type='application/json')
+        response = self.app.post('/submit', data=json.dumps({"text": 12345, "creator_id": "test"}), content_type='application/json')
         self.assertEqual(response.status_code, 400)
 
     @patch('signals.GroqLLMSignal.analyze')
@@ -110,7 +117,10 @@ class TestProvenanceGuard(unittest.TestCase):
         mock_llm_analyze.return_value = 0.8
         
         # Submit a document first
-        payload = {"text": "A standard text excerpt for testing appeals."}
+        payload = {
+            "text": "A standard text excerpt for testing appeals.",
+            "creator_id": "test-user-1"
+        }
         submit_res = self.app.post('/submit', data=json.dumps(payload), content_type='application/json')
         submit_data = json.loads(submit_res.data)
         sub_id = submit_data["submission_id"]
@@ -129,11 +139,13 @@ class TestProvenanceGuard(unittest.TestCase):
         
         # Check logs to confirm appeal status was updated
         log_res = self.app.get('/log')
-        logs = json.loads(log_res.data)
+        log_data = json.loads(log_res.data)
+        logs = log_data["entries"]
         self.assertEqual(len(logs), 1)
         self.assertIsNotNone(logs[0]["appeal"])
         self.assertEqual(logs[0]["appeal"]["status"], "under review")
         self.assertEqual(logs[0]["appeal"]["reasoning"], "This is completely my own work.")
+
 
 if __name__ == '__main__':
     unittest.main()
