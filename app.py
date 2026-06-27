@@ -10,11 +10,12 @@ load_dotenv()
 # Initialize Flask App
 app = Flask(__name__, static_folder="static", static_url_path="")
 
-# Initialize Limiter (default: 100 per day, 10 per hour across all endpoints)
+# Initialize Limiter using memory storage
 limiter = Limiter(
     key_func=get_remote_address,
     app=app,
-    default_limits=["100 per day", "10 per hour"]
+    default_limits=[],
+    storage_uri="memory://"
 )
 
 # Lazy import pipeline to ensure env vars are fully loaded before importing
@@ -32,7 +33,7 @@ def home():
     return app.send_static_file("index.html")
 
 @app.route("/submit", methods=["POST"])
-@limiter.limit("5 per minute", error_message="Rate limit exceeded. Maximum 5 submissions per minute allowed.")
+@limiter.limit("10 per minute;100 per day", error_message="Rate limit exceeded. Maximum 10 submissions per minute allowed.")
 def submit():
     if not pipeline:
         return jsonify({"error": "Pipeline failed to initialize. Check GROQ_API_KEY."}), 500
@@ -60,28 +61,32 @@ def submit():
 @app.route("/appeal", methods=["POST"])
 def appeal():
     data = request.get_json()
-    if not data or "submission_id" not in data or "reasoning" not in data:
-        return jsonify({"error": "Missing 'submission_id' or 'reasoning' field in request body"}), 400
+    if not data:
+        return jsonify({"error": "Missing JSON request body"}), 400
         
-    submission_id = data["submission_id"]
-    reasoning = data["reasoning"]
+    content_id = data.get("content_id") or data.get("submission_id")
+    creator_reasoning = data.get("creator_reasoning") or data.get("reasoning")
     
-    if not isinstance(submission_id, str) or not submission_id.strip():
-        return jsonify({"error": "Invalid 'submission_id'"}), 400
-    if not isinstance(reasoning, str) or not reasoning.strip():
-        return jsonify({"error": "Invalid 'reasoning'"}), 400
+    if not content_id or not isinstance(content_id, str) or not content_id.strip():
+        return jsonify({"error": "Missing or invalid 'content_id' or 'submission_id' in request body"}), 400
+    if not creator_reasoning or not isinstance(creator_reasoning, str) or not creator_reasoning.strip():
+        return jsonify({"error": "Missing or invalid 'creator_reasoning' or 'reasoning' in request body"}), 400
         
-    updated_entry = AuditLog.log_appeal(submission_id, reasoning)
+    updated_entry = AuditLog.log_appeal(content_id, creator_reasoning)
     if not updated_entry:
-        return jsonify({"error": f"Submission with ID '{submission_id}' not found in audit logs"}), 404
+        return jsonify({"error": f"Submission with ID '{content_id}' not found in audit logs"}), 404
         
     return jsonify({
-        "appeal_id": f"appeal-{submission_id[:8]}",
-        "submission_id": submission_id,
-        "status": "under review",
-        "reasoning": reasoning,
+        "appeal_id": f"appeal-{content_id[:8]}",
+        "content_id": content_id,
+        "submission_id": content_id,
+        "status": "under_review",
+        "creator_reasoning": creator_reasoning,
+        "appeal_reasoning": creator_reasoning,
+        "reasoning": creator_reasoning,
         "logged_at": updated_entry["appeal"]["logged_at"]
     }), 200
+
 
 @app.route("/log", methods=["GET"])
 def get_log():

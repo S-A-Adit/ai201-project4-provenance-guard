@@ -134,7 +134,7 @@ class TestProvenanceGuard(unittest.TestCase):
         self.assertEqual(appeal_res.status_code, 200)
         appeal_data = json.loads(appeal_res.data)
         
-        self.assertEqual(appeal_data["status"], "under review")
+        self.assertEqual(appeal_data["status"], "under_review")
         self.assertEqual(appeal_data["submission_id"], sub_id)
         
         # Check logs to confirm appeal status was updated
@@ -143,8 +143,9 @@ class TestProvenanceGuard(unittest.TestCase):
         logs = log_data["entries"]
         self.assertEqual(len(logs), 1)
         self.assertIsNotNone(logs[0]["appeal"])
-        self.assertEqual(logs[0]["appeal"]["status"], "under review")
+        self.assertEqual(logs[0]["appeal"]["status"], "under_review")
         self.assertEqual(logs[0]["appeal"]["reasoning"], "This is completely my own work.")
+
 
 
 if __name__ == '__main__':

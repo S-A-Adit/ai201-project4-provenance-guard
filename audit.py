@@ -56,16 +56,18 @@ class AuditLog:
         return entry
 
     @classmethod
-    def log_appeal(cls, submission_id, reasoning):
+    def log_appeal(cls, content_id, reasoning):
         logs = cls._read_logs()
         updated = False
         
         for entry in logs:
-            if entry["submission_id"] == submission_id:
-                entry["status"] = "under review"
+            if entry.get("submission_id") == content_id or entry.get("content_id") == content_id:
+                entry["status"] = "under_review"
+                entry["appeal_reasoning"] = reasoning
                 entry["appeal"] = {
-                    "status": "under review",
+                    "status": "under_review",
                     "reasoning": reasoning,
+                    "appeal_reasoning": reasoning,
                     "logged_at": datetime.utcnow().isoformat() + "Z"
                 }
                 updated = True
@@ -73,8 +75,9 @@ class AuditLog:
                 
         if updated:
             cls._write_logs(logs)
-            return next(entry for entry in logs if entry["submission_id"] == submission_id)
+            return next(entry for entry in logs if entry.get("submission_id") == content_id or entry.get("content_id") == content_id)
         return None
+
 
 
     @classmethod
