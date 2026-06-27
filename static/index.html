@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Provenance Guard — AI Text Attribution & Transparency</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --primary-glow: rgba(99, 102, 241, 0.15);
+            --green-glow: rgba(34, 197, 94, 0.15);
+            --red-glow: rgba(239, 68, 68, 0.15);
+            --yellow-glow: rgba(234, 179, 8, 0.15);
+            
+            --color-human: #22c55e;
+            --color-ai: #ef4444;
+            --color-uncertain: #eab308;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.1) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.08) 0px, transparent 50%);
+            color: var(--text-primary);
+            font-family: 'Outfit', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem 1rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+            max-width: 600px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            font-weight: 300;
+        }
+
+        main {
+            width: 100%;
+            max-width: 900px;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 2rem;
+        }
+
+        @media (min-width: 768px) {
+            main {
+                grid-template-columns: 1.2fr 0.8fr;
+            }
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        label {
+            font-weight: 500;
+            font-size: 1rem;
+            color: var(--text-primary);
+        }
+
+        textarea {
+            width: 100%;
+            height: 250px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 1rem;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.95rem;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        textarea:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 0.75rem 1.5rem;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            background: var(--primary-hover);
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* Results Display */
+        .results-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+            width: max-content;
+        }
+
+        .badge-green {
+            background: var(--green-glow);
+            color: var(--color-human);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .badge-red {
+            background: var(--red-glow);
+            color: var(--color-ai);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .badge-yellow {
+            background: var(--yellow-glow);
+            color: var(--color-uncertain);
+            border: 1px solid rgba(234, 179, 8, 0.3);
+        }
+
+        .result-header h3 {
+            font-size: 1.4rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .result-desc {
+            font-size: 0.95rem;
+            line-height: 1.6;
+            color: var(--text-secondary);
+        }
+
+        .metric-row {
+            margin-top: 1rem;
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: 10px;
+            padding: 1rem;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        .metric-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-bar-bg {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 9999px;
+            height: 8px;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .progress-bar {
+            height: 100%;
+            border-radius: 9999px;
+            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .progress-human { background: var(--color-human); }
+        .progress-ai { background: var(--color-ai); }
+        .progress-uncertain { background: var(--color-uncertain); }
+
+        /* Appeal Form */
+        .appeal-box {
+            margin-top: 1.5rem;
+            border-top: 1px solid var(--card-border);
+            padding-top: 1.5rem;
+        }
+
+        .appeal-textarea {
+            width: 100%;
+            height: 80px;
+            background: rgba(15, 23, 42, 0.4);
+            border: 1px solid var(--card-border);
+            border-radius: 8px;
+            padding: 0.75rem;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+            resize: none;
+            outline: none;
+            margin-bottom: 0.75rem;
+        }
+
+        /* Audit Log Section */
+        .audit-section {
+            width: 100%;
+            max-width: 900px;
+            margin-top: 3rem;
+        }
+
+        .audit-section h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .audit-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .audit-item {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .audit-meta {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            padding-bottom: 0.5rem;
+        }
+
+        .audit-snippet {
+            font-size: 0.9rem;
+            font-style: italic;
+            color: var(--text-primary);
+        }
+
+        .audit-badges {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .mini-badge {
+            font-size: 0.7rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-under-review {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border-left-color: white;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-msg {
+            color: var(--color-ai);
+            background: var(--red-glow);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            padding: 0.75rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Provenance Guard</h1>
+        <p>Linguistic forensics & AI attribution transparency pipeline</p>
+    </header>
+
+    <main>
+        <!-- Text Submission Column -->
+        <section class="card form-group">
+            <label for="submission-text">Submit content for attribution analysis</label>
+            <textarea id="submission-text" placeholder="Paste poem, short story, or blog excerpt here... (minimum 20 characters recommended)"></textarea>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span id="char-counter" style="font-size: 0.8rem; color: var(--text-secondary);">0 characters</span>
+                <button id="btn-submit" class="btn">
+                    <span>Analyze Content</span>
+                </button>
+            </div>
+            <div id="submission-error" class="error-msg" style="display: none;"></div>
+        </section>
+
+        <!-- Dynamic Results Column -->
+        <section class="card" id="results-card" style="display: none;">
+            <div class="results-container">
+                <div>
+                    <span id="result-badge" class="badge">Result</span>
+                    <div class="result-header">
+                        <h3 id="result-status">Attribution Status</h3>
+                        <p id="result-desc" class="result-desc">Detailed explanation will appear here...</p>
+                    </div>
+                </div>
+
+                <!-- Confidence Score -->
+                <div class="metric-row">
+                    <div class="metric-label">
+                        <span>Confidence Score</span>
+                        <strong id="confidence-val">0%</strong>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div id="confidence-bar" class="progress-bar" style="width: 0%;"></div>
+                    </div>
+                </div>
+
+                <!-- Pipeline Signals Detail -->
+                <div class="metric-row">
+                    <h4 style="font-size: 0.85rem; margin-bottom: 0.75rem; color: var(--text-primary);">Underlying Pipeline Signals</h4>
+                    
+                    <div style="margin-bottom: 0.75rem;">
+                        <div class="metric-label" style="margin-bottom: 0.25rem;">
+                            <span>Lexical & Structural Diversity</span>
+                            <span id="signal-lexical-val">0% Human</span>
+                        </div>
+                        <div class="progress-bar-bg" style="height: 4px;">
+                            <div id="signal-lexical-bar" class="progress-bar progress-human" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="metric-label" style="margin-bottom: 0.25rem;">
+                            <span>Stylistic Pattern Match (Groq API)</span>
+                            <span id="signal-style-val">0% Human</span>
+                        </div>
+                        <div class="progress-bar-bg" style="height: 4px;">
+                            <div id="signal-style-bar" class="progress-bar progress-human" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Appeals Option -->
+                <div class="appeal-box" id="appeal-section">
+                    <h4 style="font-size: 0.9rem; margin-bottom: 0.5rem;">Contest Classification</h4>
+                    <p class="result-desc" style="font-size: 0.8rem; margin-bottom: 0.75rem;">
+                        Are you the human creator of this text? Submit an appeal to flag the decision for review.
+                    </p>
+                    <textarea id="appeal-reason" class="appeal-textarea" placeholder="Explain why this classification is incorrect..."></textarea>
+                    <button id="btn-appeal" class="btn" style="background: rgba(255,255,255,0.08); color: var(--text-primary); border: 1px solid var(--card-border); width: 100%;">
+                        Submit Appeal
+                    </button>
+                    <div id="appeal-error" class="error-msg" style="display: none; font-size: 0.8rem;"></div>
+                    <div id="appeal-success" style="display: none; color: var(--color-human); font-size: 0.85rem; margin-top: 0.5rem; font-weight: 500;">
+                        ✓ Appeal logged. Attribution marked as "Under Review".
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Audit Log -->
+    <section class="audit-section">
+        <h2>
+            <span>Verification Audit Log</span>
+            <button id="btn-refresh-log" class="btn" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: transparent; border: 1px solid var(--card-border);">
+                Refresh
+            </button>
+        </h2>
+        <div id="audit-list" class="audit-list">
+            <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No audit logs retrieved yet.</p>
+        </div>
+    </section>
+
+    <script>
+        const txtSubmission = document.getElementById("submission-text");
+        const btnSubmit = document.getElementById("btn-submit");
+        const charCounter = document.getElementById("char-counter");
+        const subError = document.getElementById("submission-error");
+        
+        const resCard = document.getElementById("results-card");
+        const resBadge = document.getElementById("result-badge");
+        const resStatus = document.getElementById("result-status");
+        const resDesc = document.getElementById("result-desc");
+        const confVal = document.getElementById("confidence-val");
+        const confBar = document.getElementById("confidence-bar");
+        
+        const sigLexicalVal = document.getElementById("signal-lexical-val");
+        const sigLexicalBar = document.getElementById("signal-lexical-bar");
+        const sigStyleVal = document.getElementById("signal-style-val");
+        const sigStyleBar = document.getElementById("signal-style-bar");
+
+        const appealSection = document.getElementById("appeal-section");
+        const appealReason = document.getElementById("appeal-reason");
+        const btnAppeal = document.getElementById("btn-appeal");
+        const appealError = document.getElementById("appeal-error");
+        const appealSuccess = document.getElementById("appeal-success");
+        
+        const auditList = document.getElementById("audit-list");
+        const btnRefreshLog = document.getElementById("btn-refresh-log");
+
+        let currentSubmissionId = null;
+
+        // Characters counter
+        txtSubmission.addEventListener("input", () => {
+            charCounter.textContent = `${txtSubmission.value.length} characters`;
+        });
+
+        // Submit Analysis
+        btnSubmit.addEventListener("click", async () => {
+            const text = txtSubmission.value.trim();
+            if (!text) {
+                showError(subError, "Please enter some text before analyzing.");
+                return;
+            }
+            
+            subError.style.display = "none";
+            btnSubmit.disabled = true;
+            btnSubmit.innerHTML = `<div class="spinner"></div><span>Analyzing...</span>`;
+            
+            try {
+                const response = await fetch("/submit", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text })
+                });
+
+                if (response.status === 429) {
+                    showError(subError, "Rate limit exceeded. Please wait a minute before trying again.");
+                    return;
+                }
+
+                const data = await response.json();
+                if (!response.ok) {
+                    showError(subError, data.error || "Analysis failed.");
+                    return;
+                }
+
+                displayResults(data);
+                loadAuditLog();
+            } catch (err) {
+                showError(subError, "Network error occurred. Make sure your server is running.");
+            } finally {
+                btnSubmit.disabled = false;
+                btnSubmit.textContent = "Analyze Content";
+            }
+        });
+
+        function showError(element, msg) {
+            element.textContent = msg;
+            element.style.display = "block";
+        }
+
+        function displayResults(data) {
+            currentSubmissionId = data.submission_id;
+            resCard.style.display = "block";
+            
+            // Clear appeal form state
+            appealReason.value = "";
+            appealSuccess.style.display = "none";
+            appealError.style.display = "none";
+            btnAppeal.disabled = false;
+            
+            const badgeColor = data.transparency_label.badge_color;
+            resBadge.textContent = data.transparency_label.status;
+            resBadge.className = `badge badge-${badgeColor}`;
+            
+            resStatus.textContent = data.transparency_label.status;
+            resDesc.textContent = data.transparency_label.description;
+            
+            const confPct = Math.round(data.confidence_score * 100);
+            confVal.textContent = `${confPct}%`;
+            confBar.style.width = `${confPct}%`;
+            confBar.className = `progress-bar progress-${badgeColor}`;
+            
+            // Signals
+            const lexicalPct = Math.round(data.signals.lexical_diversity * 100);
+            sigLexicalVal.textContent = `${lexicalPct}% Human`;
+            sigLexicalBar.style.width = `${lexicalPct}%`;
+            
+            const stylePct = Math.round(data.signals.style_pattern_match * 100);
+            sigStyleVal.textContent = `${stylePct}% Human`;
+            sigStyleBar.style.width = `${stylePct}%`;
+        }
+
+        // Submit Appeal
+        btnAppeal.addEventListener("click", async () => {
+            const reasoning = appealReason.value.trim();
+            if (!reasoning) {
+                showError(appealError, "Please enter your reasoning for the appeal.");
+                return;
+            }
+            if (!currentSubmissionId) {
+                showError(appealError, "No submission ID found to appeal.");
+                return;
+            }
+
+            appealError.style.display = "none";
+            btnAppeal.disabled = true;
+
+            try {
+                const response = await fetch("/appeal", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        submission_id: currentSubmissionId,
+                        reasoning: reasoning
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    showError(appealError, data.error || "Appeal submission failed.");
+                    btnAppeal.disabled = false;
+                    return;
+                }
+
+                appealSuccess.style.display = "block";
+                loadAuditLog();
+            } catch (err) {
+                showError(appealError, "Network error occurred.");
+                btnAppeal.disabled = false;
+            }
+        });
+
+        // Load Audit Log
+        async function loadAuditLog() {
+            try {
+                const response = await fetch("/log?limit=5");
+                if (!response.ok) return;
+                const logs = await response.json();
+                
+                if (logs.length === 0) {
+                    auditList.innerHTML = `<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No logs found. Submit text above to start logging.</p>`;
+                    return;
+                }
+
+                auditList.innerHTML = logs.map(entry => {
+                    const statusClass = entry.transparency_label.badge_color;
+                    const date = new Date(entry.created_at).toLocaleString();
+                    const hasAppeal = entry.appeal ? true : false;
+                    
+                    return `
+                        <div class="audit-item">
+                            <div class="audit-meta">
+                                <span>ID: ${entry.submission_id}</span>
+                                <span>${date}</span>
+                            </div>
+                            <p class="audit-snippet">"${entry.text_snippet}"</p>
+                            <div class="audit-badges">
+                                <span class="mini-badge badge-${statusClass}">${entry.transparency_label.status}</span>
+                                <span class="mini-badge" style="background: rgba(255,255,255,0.05); color: var(--text-secondary);">
+                                    Confidence: ${Math.round(entry.confidence_score * 100)}%
+                                </span>
+                                ${hasAppeal ? `<span class="mini-badge status-under-review">Under Review</span>` : ''}
+                            </div>
+                            ${hasAppeal ? `
+                                <div style="font-size: 0.8rem; background: rgba(0,0,0,0.2); padding: 0.5rem; border-radius: 6px; color: var(--text-secondary); border-left: 3px solid #3b82f6;">
+                                    <strong>Appeal reasoning:</strong> "${entry.appeal.reasoning}"
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                }).join("");
+            } catch (err) {
+                console.error("Failed to load audit logs:", err);
+            }
+        }
+
+        btnRefreshLog.addEventListener("click", loadAuditLog);
+
+        // Initial Load
+        loadAuditLog();
+    </script>
+</body>
+</html>
